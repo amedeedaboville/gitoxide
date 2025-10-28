@@ -4,6 +4,7 @@
 //! without international domain name (IDN) support.
 
 use bstr::{BStr, ByteSlice};
+use percent_encoding::percent_decode_str;
 
 use crate::{parse::Error, parse::UrlKind, Scheme};
 
@@ -60,6 +61,15 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
 
     // Extract scheme
     let scheme_str = &input[..protocol_end];
+
+    // Validate scheme: must contain only alphanumeric, +, -, or .
+    // This matches URL spec and rejects things like "invalid:" (with colon) or double colons
+    if !scheme_str.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        return Err(Error::RelativeUrl {
+            url: input.to_owned(),
+        });
+    }
+
     let scheme = Scheme::from(scheme_str);
 
     // Parse the rest: [user[:password]@]host[:port][/path]
@@ -84,6 +94,18 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         port,
         path: path.into(),
     })
+}
+
+/// Decode percent-encoded strings
+fn percent_decode(s: &str) -> Result<String, Error> {
+    percent_decode_str(s)
+        .decode_utf8()
+        .map(|cow| cow.into_owned())
+        .map_err(|err| Error::Utf8 {
+            url: s.into(),
+            kind: UrlKind::Url,
+            source: err,
+        })
 }
 
 /// Parse authority (user, password, host, port) and path from a URL.
@@ -113,6 +135,13 @@ fn parse_authority_and_path(
         path
     };
 
+    // HTTP URLs must have at least "/" as path
+    let path = if path.is_empty() && matches!(scheme, Scheme::Http | Scheme::Https) {
+        "/"
+    } else {
+        path
+    };
+
     Ok((user, password, host, port, path.to_string()))
 }
 
@@ -130,13 +159,23 @@ fn parse_authority(
     };
 
     // Parse user info: user[:password]
+    // User and password are percent-encoded in URLs
     let (user, password) = if let Some(user_info) = user_info {
         if let Some(colon_pos) = user_info.find(':') {
             let user = &user_info[..colon_pos];
             let password = &user_info[colon_pos + 1..];
-            (Some(user.to_string()), Some(password.to_string()))
+            let user_decoded = percent_decode(user)?;
+            let password_decoded = percent_decode(password)?;
+            // When there's a colon, keep empty user as Some("") to distinguish from no user
+            // This handles URLs like http://:password@host
+            (
+                Some(user_decoded),
+                if password_decoded.is_empty() { None } else { Some(password_decoded) },
+            )
         } else {
-            (Some(user_info.to_string()), None)
+            let user_decoded = percent_decode(user_info)?;
+            // When there's no colon, empty user becomes None
+            (if user_decoded.is_empty() { None } else { Some(user_decoded) }, None)
         }
     } else {
         (None, None)
