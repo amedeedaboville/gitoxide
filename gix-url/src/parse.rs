@@ -117,6 +117,15 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         return Err(Error::RelativeUrl { url: input.to_owned() });
     }
 
+    // Git's behavior: paths starting with /~ should become ~ for tilde expansion on remote
+    // This matches Git's native behavior for SSH and Git protocols
+    let path = url.path();
+    let path = if path.starts_with("/~") && matches!(scheme, Scheme::Ssh | Scheme::Git) {
+        &path[1..] // Remove leading /
+    } else {
+        path
+    };
+
     Ok(crate::Url {
         serialize_alternative_form: false,
         scheme,
@@ -127,7 +136,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             .transpose()?,
         host: url.host_str().map(Into::into),
         port: url.port(),
-        path: url.path().into(),
+        path: path.into(),
     })
 }
 
