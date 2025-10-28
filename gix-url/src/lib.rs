@@ -21,6 +21,7 @@ mod impls;
 
 ///
 pub mod parse;
+mod parse_simple;
 
 /// Parse the given `bytes` as a [git url](Url).
 ///
@@ -30,13 +31,13 @@ pub mod parse;
 /// For file-paths, we don't expect UTF8 encoding either.
 pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
     use parse::InputScheme;
-    match parse::find_scheme(input) {
-        InputScheme::Local => parse::local(input),
+    match parse_simple::find_scheme(input) {
+        InputScheme::Local => parse_simple::local(input),
         InputScheme::Url { protocol_end } if input[..protocol_end].eq_ignore_ascii_case(b"file") => {
-            parse::file_url(input, protocol_end)
+            parse_simple::file_url(input, protocol_end)
         }
-        InputScheme::Url { protocol_end } => parse::url(input, protocol_end),
-        InputScheme::Scp { colon } => parse::scp(input, colon),
+        InputScheme::Url { protocol_end } => parse_simple::url(input, protocol_end),
+        InputScheme::Scp { colon } => parse_simple::scp(input, colon),
     }
 }
 
@@ -371,6 +372,10 @@ impl Url {
         }
         if let Some(port) = &self.port {
             write!(out, ":{port}")?;
+        }
+        // Canonical URLs need paths to start with /
+        if !self.path.is_empty() && !self.path.starts_with(b"/") {
+            out.write_all(b"/")?;
         }
         out.write_all(&self.path)?;
         Ok(())
