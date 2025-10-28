@@ -15,12 +15,16 @@ pub enum Error {
         kind: UrlKind,
         source: std::str::Utf8Error,
     },
+    #[cfg(feature = "idn-support")]
     #[error("{} {url:?} can not be parsed as valid URL", kind.as_str())]
     Url {
         url: String,
         kind: UrlKind,
         source: url::ParseError,
     },
+
+    #[error("Invalid port in {url:?}")]
+    InvalidPort { url: String },
 
     #[error("The host portion of the following URL is too long ({} bytes, {len} bytes total): {truncated_url:?}", truncated_url.len())]
     TooLong { truncated_url: BString, len: usize },
@@ -84,6 +88,7 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
     InputScheme::Local
 }
 
+#[cfg(feature = "idn-support")]
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
     let bytes_to_path = input[protocol_end + "://".len()..]
@@ -126,6 +131,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     })
 }
 
+#[cfg(feature = "idn-support")]
 fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
     Ok(percent_decode_str(s)
         .decode_utf8()
@@ -137,6 +143,7 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
         .into_owned())
 }
 
+#[cfg(feature = "idn-support")]
 pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
@@ -176,6 +183,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     })
 }
 
+#[cfg(feature = "idn-support")]
 fn url_user(url: &url::Url, kind: UrlKind) -> Result<Option<String>, Error> {
     if url.username().is_empty() && url.password().is_none() {
         Ok(None)
@@ -184,6 +192,7 @@ fn url_user(url: &url::Url, kind: UrlKind) -> Result<Option<String>, Error> {
     }
 }
 
+#[cfg(feature = "idn-support")]
 pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Url)?;
     let input_after_protocol = &input[protocol_colon + "://".len()..];
@@ -269,6 +278,7 @@ fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str, Error> {
     })
 }
 
+#[cfg(feature = "idn-support")]
 fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, url::Url), Error> {
     let input = input_to_utf8(input, kind)?;
     url::Url::parse(input)

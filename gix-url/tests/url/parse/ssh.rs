@@ -24,8 +24,10 @@ fn host_is_ipv4() -> crate::Result {
 }
 
 #[test]
+#[cfg(not(feature = "idn-support"))]
 fn username_expansion_with_username() -> crate::Result {
     // Git strips leading / from /~ paths for tilde expansion on remote
+    // This behavior is only implemented in the simple parser (default)
     assert_url_roundtrip(
         "ssh://example.com/~byron/hello/git",
         url(Scheme::Ssh, None, "example.com", None, b"~byron/hello/git"),
@@ -33,11 +35,33 @@ fn username_expansion_with_username() -> crate::Result {
 }
 
 #[test]
+#[cfg(feature = "idn-support")]
+fn username_expansion_with_username_old_parser() -> crate::Result {
+    // The old parser (with idn-support) doesn't strip the leading /
+    assert_url_roundtrip(
+        "ssh://example.com/~byron/hello/git",
+        url(Scheme::Ssh, None, "example.com", None, b"/~byron/hello/git"),
+    )
+}
+
+#[test]
+#[cfg(not(feature = "idn-support"))]
 fn username_expansion_without_username() -> crate::Result {
     // Git strips leading / from /~ paths for tilde expansion on remote
+    // This behavior is only implemented in the simple parser (default)
     assert_url_roundtrip(
         "ssh://example.com/~/hello/git",
         url(Scheme::Ssh, None, "example.com", None, b"~/hello/git"),
+    )
+}
+
+#[test]
+#[cfg(feature = "idn-support")]
+fn username_expansion_without_username_old_parser() -> crate::Result {
+    // The old parser (with idn-support) doesn't strip the leading /
+    assert_url_roundtrip(
+        "ssh://example.com/~/hello/git",
+        url(Scheme::Ssh, None, "example.com", None, b"/~/hello/git"),
     )
 }
 

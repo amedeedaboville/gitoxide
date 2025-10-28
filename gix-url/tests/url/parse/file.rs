@@ -140,6 +140,7 @@ mod windows {
     }
 
     #[test]
+    #[cfg(feature = "idn-support")]
     fn url_from_absolute_path() -> crate::Result {
         assert_url(
             url::Url::from_directory_path(r"c:\users\1")
@@ -188,6 +189,7 @@ mod unix {
     use crate::parse::{assert_url_roundtrip, url, url_alternate};
 
     #[test]
+    #[cfg(feature = "idn-support")]
     fn url_from_absolute_path() -> crate::Result {
         assert_url_roundtrip(
             url::Url::from_directory_path("/users/foo")

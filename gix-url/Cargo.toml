@@ -17,6 +17,9 @@ doctest = false
 [features]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde"]
+## Enable internationalized domain name (IDN) support using the `url` crate for more comprehensive URL parsing.
+## When disabled (default), uses a lighter-weight Git-compatible parser.
+idn-support = ["dep:url"]
 
 [dependencies]
 gix-features = { version = "^0.44.1", path = "../gix-features" }
@@ -24,7 +27,7 @@ gix-path = { version = "^0.10.21", path = "../gix-path" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
 thiserror = "2.0.17"
-url = "2.5.2"
+url = { version = "2.5.2", optional = true }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 percent-encoding = "2.3.1"
 

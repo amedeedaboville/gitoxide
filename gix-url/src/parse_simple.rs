@@ -205,10 +205,8 @@ fn parse_host_port(host_port: &str) -> Result<(Option<String>, Option<u16>), Err
             let after_bracket = &host_port[close_bracket + 1..];
 
             let port = if after_bracket.starts_with(':') && after_bracket.len() > 1 {
-                Some(after_bracket[1..].parse().map_err(|_| Error::Url {
+                Some(after_bracket[1..].parse().map_err(|_| Error::InvalidPort {
                     url: host_port.to_string(),
-                    kind: UrlKind::Url,
-                    source: url::ParseError::InvalidPort,
                 })?)
             } else {
                 None
@@ -241,10 +239,8 @@ fn parse_host_port(host_port: &str) -> Result<(Option<String>, Option<u16>), Err
 
         // Only parse as port if it's actually numeric
         if port_str.chars().all(|c| c.is_ascii_digit()) {
-            let port = port_str.parse().map_err(|_| Error::Url {
+            let port = port_str.parse().map_err(|_| Error::InvalidPort {
                 url: host_port.to_string(),
-                kind: UrlKind::Url,
-                source: url::ParseError::InvalidPort,
             })?;
             Ok((Some(host.to_string()), Some(port)))
         } else {

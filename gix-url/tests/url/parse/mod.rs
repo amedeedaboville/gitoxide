@@ -113,11 +113,23 @@ mod git {
     use crate::parse::{assert_url_roundtrip, url};
 
     #[test]
+    #[cfg(not(feature = "idn-support"))]
     fn username_expansion_with_username() -> crate::Result {
         // Git strips leading / from /~ paths for tilde expansion on remote
+        // This behavior is only implemented in the simple parser (default)
         assert_url_roundtrip(
             "git://example.com/~byron/hello",
             url(Scheme::Git, None, "example.com", None, b"~byron/hello"),
+        )
+    }
+
+    #[test]
+    #[cfg(feature = "idn-support")]
+    fn username_expansion_with_username_old_parser() -> crate::Result {
+        // The old parser (with idn-support) doesn't strip the leading /
+        assert_url_roundtrip(
+            "git://example.com/~byron/hello",
+            url(Scheme::Git, None, "example.com", None, b"/~byron/hello"),
         )
     }
 }

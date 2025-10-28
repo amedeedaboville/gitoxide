@@ -191,9 +191,22 @@ mod baseline {
         }
 
         pub fn max_num_failures(&self) -> usize {
-            match self {
-                Kind::Unix => 33,
-                Kind::Windows => 33 + 6,
+            // When idn-support is enabled, we use the old url-crate-based parser which has
+            // worse Git compatibility. When disabled (default), we use the simple parser which
+            // has much better Git compatibility.
+            #[cfg(feature = "idn-support")]
+            {
+                match self {
+                    Kind::Unix => 198,
+                    Kind::Windows => 198 + 6,
+                }
+            }
+            #[cfg(not(feature = "idn-support"))]
+            {
+                match self {
+                    Kind::Unix => 33,
+                    Kind::Windows => 33 + 6,
+                }
             }
         }
 

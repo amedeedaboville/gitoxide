@@ -20,7 +20,11 @@ pub use scheme::Scheme;
 mod impls;
 
 ///
+#[cfg_attr(not(feature = "idn-support"), doc = "The parse module provides Git-compatible URL parsing without IDN support.")]
+#[cfg_attr(feature = "idn-support", doc = "The parse module provides comprehensive URL parsing with IDN support.")]
 pub mod parse;
+
+#[cfg(not(feature = "idn-support"))]
 mod parse_simple;
 
 /// Parse the given `bytes` as a [git url](Url).
@@ -29,6 +33,7 @@ mod parse_simple;
 ///
 /// We cannot and should never have to deal with UTF-16 encoded windows strings, so bytes input is acceptable.
 /// For file-paths, we don't expect UTF8 encoding either.
+#[cfg(not(feature = "idn-support"))]
 pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
     use parse::InputScheme;
     match parse_simple::find_scheme(input) {
@@ -38,6 +43,25 @@ pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
         }
         InputScheme::Url { protocol_end } => parse_simple::url(input, protocol_end),
         InputScheme::Scp { colon } => parse_simple::scp(input, colon),
+    }
+}
+
+/// Parse the given `bytes` as a [git url](Url).
+///
+/// # Note
+///
+/// We cannot and should never have to deal with UTF-16 encoded windows strings, so bytes input is acceptable.
+/// For file-paths, we don't expect UTF8 encoding either.
+#[cfg(feature = "idn-support")]
+pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
+    use parse::InputScheme;
+    match parse::find_scheme(input) {
+        InputScheme::Local => parse::local(input),
+        InputScheme::Url { protocol_end } if input[..protocol_end].eq_ignore_ascii_case(b"file") => {
+            parse::file_url(input, protocol_end)
+        }
+        InputScheme::Url { protocol_end } => parse::url(input, protocol_end),
+        InputScheme::Scp { colon } => parse::scp(input, colon),
     }
 }
 
