@@ -15,6 +15,7 @@ pub enum Error {
         kind: UrlKind,
         source: std::str::Utf8Error,
     },
+    #[cfg(feature = "idn")]
     #[error("{} {url:?} can not be parsed as valid URL", kind.as_str())]
     Url {
         url: String,
@@ -98,31 +99,43 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             len: input.len(),
         });
     }
-    let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
-    let scheme = url.scheme().into();
+    #[cfg(feature = "idn")]
+    {
+        let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
+        let scheme = url.scheme().into();
 
-    if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path().is_empty() {
-        return Err(Error::MissingRepositoryPath {
-            url: input.into(),
-            kind: UrlKind::Url,
-        });
+        if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path().is_empty() {
+            return Err(Error::MissingRepositoryPath {
+                url: input.into(),
+                kind: UrlKind::Url,
+            });
+        }
+
+        if url.cannot_be_a_base() {
+            return Err(Error::RelativeUrl { url: input.to_owned() });
+        }
+
+        Ok(crate::Url {
+            serialize_alternative_form: false,
+            scheme,
+            user: url_user(&url, UrlKind::Url)?,
+            password: url
+                .password()
+                .map(|s| percent_decoded_utf8(s, UrlKind::Url))
+                .transpose()?,
+            host: url.host_str().map(Into::into),
+            port: url.port(),
+            path: url.path().into(),
+        })
     }
-
-    if url.cannot_be_a_base() {
-        return Err(Error::RelativeUrl { url: input.to_owned() });
-    }
-
     Ok(crate::Url {
         serialize_alternative_form: false,
-        scheme,
-        user: url_user(&url, UrlKind::Url)?,
-        password: url
-            .password()
-            .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-            .transpose()?,
-        host: url.host_str().map(Into::into),
-        port: url.port(),
-        path: url.path().into(),
+        scheme: Scheme::Http,
+        user: None,
+        password: None,
+        host: None,
+        port: None,
+        path: "".into(),
     })
 }
 
@@ -152,30 +165,43 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
         });
     }
 
-    // The path returned by the parsed url often has the wrong number of leading `/` characters but
-    // should never differ in any other way (ssh URLs should not contain a query or fragment part).
-    // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
-    // determined above and can therefore skip parsing it here as well.
-    let url = url::Url::parse(&format!("ssh://{host}")).map_err(|source| Error::Url {
-        url: input.to_owned(),
-        kind: UrlKind::Scp,
-        source,
-    })?;
+    #[cfg(feature = "idn")]
+    {
+        // The path returned by the parsed url often has the wrong number of leading `/` characters but
+        // should never differ in any other way (ssh URLs should not contain a query or fragment part).
+        // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
+        // determined above and can therefore skip parsing it here as well.
+        let url = url::Url::parse(&format!("ssh://{host}")).map_err(|source| Error::Url {
+            url: input.to_owned(),
+            kind: UrlKind::Scp,
+            source,
+        })?;
 
+        Ok(crate::Url {
+            serialize_alternative_form: true,
+            scheme: url.scheme().into(),
+            user: url_user(&url, UrlKind::Scp)?,
+            password: url
+                .password()
+                .map(|s| percent_decoded_utf8(s, UrlKind::Scp))
+                .transpose()?,
+            host: url.host_str().map(Into::into),
+            port: url.port(),
+            path: path.into(),
+        })
+    }
     Ok(crate::Url {
         serialize_alternative_form: true,
-        scheme: url.scheme().into(),
-        user: url_user(&url, UrlKind::Scp)?,
-        password: url
-            .password()
-            .map(|s| percent_decoded_utf8(s, UrlKind::Scp))
-            .transpose()?,
-        host: url.host_str().map(Into::into),
-        port: url.port(),
+        scheme: Scheme::Http,
+        user: None,
+        password: None,
+        host: Some(host.into()),
+        port: None,
         path: path.into(),
     })
 }
 
+#[cfg(feature = "idn")]
 fn url_user(url: &url::Url, kind: UrlKind) -> Result<Option<String>, Error> {
     if url.username().is_empty() && url.password().is_none() {
         Ok(None)
@@ -269,6 +295,7 @@ fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str, Error> {
     })
 }
 
+#[cfg(feature = "idn")]
 fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, url::Url), Error> {
     let input = input_to_utf8(input, kind)?;
     url::Url::parse(input)
