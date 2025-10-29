@@ -15,12 +15,15 @@ pub enum Error {
         kind: UrlKind,
         source: std::str::Utf8Error,
     },
-    #[cfg(feature = "idn")]
+
     #[error("{} {url:?} can not be parsed as valid URL", kind.as_str())]
     Url {
         url: String,
         kind: UrlKind,
+        #[cfg(feature = "idn")]
         source: url::ParseError,
+        #[cfg(not(feature = "idn"))]
+        reason: String,
     },
 
     #[error("The host portion of the following URL is too long ({} bytes, {len} bytes total): {truncated_url:?}", truncated_url.len())]
@@ -85,6 +88,10 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
     InputScheme::Local
 }
 
+fn is_allowed_scheme_char(chr: char) -> bool {
+    matches!(chr, 'a'..='z' | 'A'..='Z' | '0'..='9' | '+' | '-' | '.')
+}
+
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
     let bytes_to_path = input[protocol_end + "://".len()..]
@@ -128,15 +135,34 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             path: url.path().into(),
         })
     }
-    Ok(crate::Url {
-        serialize_alternative_form: false,
-        scheme: Scheme::Http,
-        user: None,
-        password: None,
-        host: None,
-        port: None,
-        path: "".into(),
-    })
+    #[cfg(not(feature = "idn"))]
+    {
+        let input = std::str::from_utf8(input).map_err(|source| Error::Utf8 {
+            url: input.to_owned(),
+            kind: UrlKind::Url,
+            source,
+        })?;
+
+        let scheme_str = &input[..protocol_end];
+        if !scheme_str.chars().all(is_allowed_scheme_char) {
+            return Err(Error::Url {
+                url: input.to_string(),
+                kind: UrlKind::Url,
+                reason: "Scheme contains invalid characters".into(),
+            });
+        }
+        let scheme = Scheme::from(scheme_str);
+
+        Ok(crate::Url {
+            serialize_alternative_form: false,
+            scheme,
+            user: None,
+            password: None,
+            host: None,
+            port: None,
+            path: "".into(),
+        })
+    }
 }
 
 fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
