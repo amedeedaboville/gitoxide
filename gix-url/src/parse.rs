@@ -5,6 +5,11 @@ use percent_encoding::percent_decode_str;
 
 use crate::Scheme;
 
+// Characters considered unsafe per RFC 3986 and Git's implementation.
+const URL_UNSAFE_CHARS: &str = " <>\"#%{}|\\^`";
+// RFC 3986 reserved characters (gen-delims + sub-delims).
+const URL_RESERVED: &str = ":/?#[]@!$&'()*+,;=";
+
 /// The error returned by [parse()](crate::parse()).
 #[derive(Debug, thiserror::Error)]
 #[allow(missing_docs)]
@@ -153,18 +158,73 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         }
         let scheme = Scheme::from(scheme_str);
 
+        // Parse `userinfo` (username[:password]) if present and before the path/query/fragment.
+        let authority_start = protocol_end + "://".len();
+        let authority_end = input[authority_start..]
+            .find(|c: char| matches!(c, '/' | '?' | '#'))
+            .map(|offset| authority_start + offset)
+            .unwrap_or(input.len());
+        let authority = &input[authority_start..authority_end];
+        /*
+         * Match one of:
+         *   (1) proto://<host>/...
+         *   (2) proto://<user>@<host>/...
+         *   (3) proto://<user>:<pass>@<host>/...
+         */
+        let (raw_host, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
+            if let Some((user, pass)) = userinfo.split_once(':') {
+                (host, Some(user), Some(pass))
+            } else {
+                (host, Some(userinfo), None)
+            }
+        } else {
+            (authority, None, None)
+        };
+
+        let (raw_host, port) = parse_host_port(raw_host);
+        let raw_path = input[authority_end..].trim_start_matches('/');
+        let path = if !raw_path.is_empty() {
+            let decoded = append_normalized_escapes(raw_path, "", URL_RESERVED).expect("percent decode error for path");
+            "/".to_string() + &decoded.trim_end_matches('/').to_string()
+        } else {
+            "/".to_string()
+        };
+        let (host, user, password) = (
+            raw_host.map(|s| {
+                append_normalized_escapes(s.as_ref(), "", URL_RESERVED).expect("percent decode error for host")
+            }),
+            raw_user.map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for user")),
+            raw_password
+                .map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for password")),
+        );
+
+        // Git's behavior: paths starting with /~ should become ~
+        // This is for tilde expansion on the remote side
+        let path = if path.starts_with("/~") && matches!(scheme, Scheme::Ssh | Scheme::Git) {
+            &path[1..] // Remove leading /
+        } else {
+            &path
+        };
+
         Ok(crate::Url {
             serialize_alternative_form: false,
             scheme,
-            user: None,
-            password: None,
-            host: None,
-            port: None,
-            path: "".into(),
+            user,
+            password,
+            host,
+            port,
+            path: path.into(),
         })
     }
 }
 
+fn parse_host_port(host_port: &str) -> (Option<String>, Option<u16>) {
+    if host_port.is_empty() {
+        return (None, None);
+    }
+    let (host, port) = host_port.split_once(':').unwrap_or((host_port, ""));
+    (Some(host.to_string()), port.parse::<u16>().ok())
+}
 fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
     Ok(percent_decode_str(s)
         .decode_utf8()
@@ -174,6 +234,68 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
             source: err,
         })?
         .into_owned())
+}
+
+/*
+ * Convert two consecutive hexadecimal digits into a char.  Return a
+ * negative value on error.  Don't run over the end of short strings.
+ */
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + (b - b'a')),
+        b'A'..=b'F' => Some(10 + (b - b'A')),
+        _ => None,
+    }
+}
+
+fn hex_to_char(hi: u8, lo: u8) -> Option<u8> {
+    let Some(hi_v) = hex_val(hi) else { return None };
+    let Some(lo_v) = hex_val(lo) else {
+        return None;
+    };
+    Some((hi_v << 4) | lo_v)
+}
+
+fn append_normalized_escapes(from: &str, esc_extra: &str, esc_ok: &str) -> Result<String, ()> {
+    let bytes = from.as_bytes();
+    let mut i = 0usize;
+    let mut out = String::with_capacity(from.len());
+
+    while i < bytes.len() {
+        let mut ch = bytes[i];
+        let mut was_esc = false;
+        i += 1;
+
+        if ch == b'%' {
+            if i + 1 >= bytes.len() {
+                return Err(());
+            }
+            was_esc = true;
+            let Some(converted_ch) = hex_to_char(bytes[i], bytes[i + 1]) else {
+                return Err(());
+            };
+            ch = converted_ch;
+            i += 2;
+        }
+
+        let should_escape = ch <= 0x1F
+            || ch >= 0x7F
+            || URL_UNSAFE_CHARS.as_bytes().contains(&ch)
+            || (!esc_extra.is_empty() && esc_extra.as_bytes().contains(&ch))
+            || (was_esc && !esc_ok.is_empty() && esc_ok.as_bytes().contains(&ch));
+
+        if should_escape {
+            out.push('%');
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push(HEX[(ch >> 4) as usize] as char);
+            out.push(HEX[(ch & 0x0F) as usize] as char);
+        } else {
+            out.push(ch as char);
+        }
+    }
+
+    Ok(out)
 }
 
 pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
