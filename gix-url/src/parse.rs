@@ -338,10 +338,19 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
             path: path.into(),
         })
     }
+    let (user, host_with_brackets) = match host.split_once('@') {
+        Some((user, host)) => (Some(user.to_string()), host),
+        None => (None, host),
+    };
+    let host = if host_with_brackets.starts_with('[') && host_with_brackets.ends_with(']') {
+        &host_with_brackets[1..host_with_brackets.len() - 1]
+    } else {
+        host_with_brackets
+    };
     Ok(crate::Url {
         serialize_alternative_form: true,
-        scheme: Scheme::Http,
-        user: None,
+        scheme: Scheme::Ssh,
+        user,
         password: None,
         host: Some(host.into()),
         port: None,
