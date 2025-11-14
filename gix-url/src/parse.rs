@@ -145,11 +145,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         let input = input_to_utf8(input, UrlKind::Url)?;
         let scheme_str = &input[..protocol_end];
         if !scheme_str.chars().all(is_allowed_scheme_char) {
-            return Err(Error::Url {
-                url: input.to_string(),
-                kind: UrlKind::Url,
-                reason: "Scheme contains invalid characters".into(),
-            });
+            return Err(Error::RelativeUrl { url: input.to_owned() });
         }
         let scheme = Scheme::from(scheme_str);
 
