@@ -218,12 +218,27 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     }
 }
 
-fn parse_host_port(host_port: &str) -> (Option<String>, Option<u16>) {
+fn parse_host_port(host_port: &str) -> (Option<&str>, Option<u16>) {
     if host_port.is_empty() {
         return (None, None);
     }
-    let (host, port) = host_port.split_once(':').unwrap_or((host_port, ""));
-    (Some(host.to_string()), port.parse::<u16>().ok())
+    // Bracketed IPv6: [addr]:port?
+    if let Some(rest) = host_port.strip_prefix('[') {
+        if let Some((host, after)) = rest.split_once(']') {
+            let port = after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
+            return (Some(host), port);
+        }
+    }
+    // Unbracketed IPv6 (contains multiple colons) - treat entire segment as host, no port.
+    if host_port.bytes().filter(|b| *b == b':').count() > 1 {
+        return (Some(host_port), None);
+    }
+    // Regular host[:port]
+    if let Some((host, port)) = host_port.split_once(':') {
+        return (Some(host), port.parse::<u16>().ok());
+    }
+    // Has no leading [, no ipv6 ::, and no colon, treat it as regular host
+    (Some(host_port), None)
 }
 fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
     Ok(percent_decode_str(s)
@@ -298,11 +313,29 @@ fn append_normalized_escapes(from: &str, esc_extra: &str, esc_ok: &str) -> Resul
     Ok(out)
 }
 
-pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
+pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
-    // TODO: this incorrectly splits at IPv6 addresses, check for `[]` before splitting
-    let (host, path) = input.split_at(colon);
+    // Find the delimiter colon for scp-like syntax, but ignore colons inside IPv6 brackets.
+    // Prefer the last colon outside of brackets to support inputs with additional colons.
+    let mut bracket_depth = 0usize;
+    let mut split_at: Option<usize> = None;
+    for (idx, byte) in input.as_bytes().iter().enumerate() {
+        match *byte {
+            b'[' => bracket_depth = bracket_depth.saturating_add(1),
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b':' if bracket_depth == 0 => split_at = Some(idx),
+            _ => {}
+        }
+    }
+    let Some(split_at) = split_at else {
+        return Err(Error::MissingRepositoryPath {
+            url: input.to_owned().into(),
+            kind: UrlKind::Scp,
+        });
+    };
+
+    let (host, path) = input.split_at(split_at);
     debug_assert_eq!(path.get(..1), Some(":"), "{path} should start with :");
     let path = &path[1..];
 
