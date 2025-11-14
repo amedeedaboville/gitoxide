@@ -171,7 +171,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
          *   (2) proto://<user>@<host>/...
          *   (3) proto://<user>:<pass>@<host>/...
          */
-        let (raw_host, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
+        let (raw_host_port, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
             if let Some((user, pass)) = userinfo.split_once(':') {
                 (host, Some(user), Some(pass))
             } else {
@@ -181,7 +181,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             (authority, None, None)
         };
 
-        let (raw_host, port) = parse_host_port(raw_host, scheme == Scheme::Git);
+        let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
         let raw_path = input[authority_end..].trim_start_matches('/');
         let path = if !raw_path.is_empty() {
             let decoded = append_normalized_escapes(raw_path, "", URL_RESERVED).expect("percent decode error for path");
@@ -190,8 +190,16 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             "/".to_string()
         };
         let (host, user, password) = (
-            raw_host.map(|s| {
-                append_normalized_escapes(s.as_ref(), "", URL_RESERVED).expect("percent decode error for host")
+            parsed_host.map(|h| {
+                // Preserve trailing ':' in host for git URLs without an explicit port (e.g., git://host:/repo).
+                let preserve_trailing_colon =
+                    scheme == Scheme::Git && raw_host_port.ends_with(':') && port.is_none() && !h.ends_with(':');
+                let prepared_host = if preserve_trailing_colon {
+                    format!("{h}:")
+                } else {
+                    h.to_string()
+                };
+                append_normalized_escapes(&prepared_host, "", URL_RESERVED).expect("percent decode error for host")
             }),
             raw_user.map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for user")),
             raw_password
