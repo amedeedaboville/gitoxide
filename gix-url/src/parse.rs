@@ -217,12 +217,13 @@ fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Opt
         return (None, None);
     }
     // Bracketed IPv6: [addr]:port?
-    if !is_protocol_git {
-        if let Some(rest) = host_port.strip_prefix('[') {
-            if let Some((host, after)) = rest.split_once(']') {
-                let port = after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
-                return (Some(host), port);
-            }
+    if host_port.starts_with('[') {
+        if let Some(end_pos) = host_port.find(']') {
+            let host = &host_port[..=end_pos];
+            let port = host_port[end_pos + 1..]
+                .strip_prefix(':')
+                .and_then(|p| p.parse::<u16>().ok());
+            return (Some(host), port);
         }
     }
     // Unbracketed IPv6 (contains multiple colons) - treat entire segment as host, no port.

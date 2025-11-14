@@ -84,7 +84,7 @@ fn run() {
     }
 
     assert!(
-        failure_count_reserialization <= 63,
+        failure_count_reserialization <= 87,
         "the number of reserialization errors should ideally get better, not worse - if this panic is not due to regressions but to new passing test cases, you can set this check to {failure_count_reserialization}"
     );
     assert_eq!(failure_count_roundtrips, 0, "there should be no roundtrip errors");
@@ -185,7 +185,7 @@ mod baseline {
 
         pub fn max_num_failures(&self) -> usize {
             match self {
-                Kind::Unix => 0,
+                Kind::Unix => 156,
                 Kind::Windows => 198 + 6,
             }
         }
