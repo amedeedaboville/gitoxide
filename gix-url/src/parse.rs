@@ -142,12 +142,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     }
     #[cfg(not(feature = "idn"))]
     {
-        let input = std::str::from_utf8(input).map_err(|source| Error::Utf8 {
-            url: input.to_owned(),
-            kind: UrlKind::Url,
-            source,
-        })?;
-
+        let input = input_to_utf8(input, UrlKind::Url)?;
         let scheme_str = &input[..protocol_end];
         if !scheme_str.chars().all(is_allowed_scheme_char) {
             return Err(Error::Url {
@@ -173,36 +168,40 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
          */
         let (raw_host_port, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
             if let Some((user, pass)) = userinfo.split_once(':') {
-                (host, Some(user), Some(pass))
+                let user = Some(user); // keep empty user if password is present
+                let pass = (!pass.is_empty()).then_some(pass);
+                (host, user, pass)
             } else {
-                (host, Some(userinfo), None)
+                let user = (!userinfo.is_empty()).then_some(userinfo);
+                (host, user, None)
             }
         } else {
             (authority, None, None)
         };
 
+        // Parse host[:port] portion
         let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
-        let raw_path = input[authority_end..].trim_start_matches('/');
-        let path = if !raw_path.is_empty() {
-            let decoded = append_normalized_escapes(raw_path, "", URL_RESERVED).expect("percent decode error for path");
-            "/".to_string() + &decoded.trim_end_matches('/').to_string()
-        } else {
-            "/".to_string()
-        };
         let (host, user, password) = (
-            parsed_host
-                .map(|h| append_normalized_escapes(&h, "", URL_RESERVED).expect("percent decode error for host")),
-            raw_user.map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for user")),
+            parsed_host.and_then(|h| escape_url_chars(&h).ok()),
+            raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?,
             raw_password
-                .map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for password")),
+                .filter(|s| !s.is_empty())
+                .map(|s| percent_decoded_utf8(s, UrlKind::Url))
+                .transpose()?,
         );
 
-        // Git's behavior: paths starting with /~ should become ~
-        // This is for tilde expansion on the remote side
-        let path = if path.starts_with("/~") && matches!(scheme, Scheme::Ssh | Scheme::Git) {
-            &path[1..] // Remove leading /
-        } else {
-            &path
+        let raw_path = &input[authority_end..];
+        let path = match (raw_path.is_empty(), &scheme) {
+            (false, _) => escape_url_chars(raw_path).expect("percent decode error for path"),
+            (true, Scheme::Http | Scheme::Https) => "/".to_string(),
+            // Path is required for ssh and git URLs
+            (true, Scheme::Ssh | Scheme::Git) => {
+                return Err(Error::MissingRepositoryPath {
+                    url: input.into(),
+                    kind: UrlKind::Url,
+                });
+            }
+            (true, _) => "".to_string(),
         };
 
         Ok(crate::Url {
@@ -283,6 +282,9 @@ fn hex_to_char(hi: u8, lo: u8) -> Option<u8> {
     Some((hi_v << 4) | lo_v)
 }
 
+fn escape_url_chars(from: &str) -> Result<String, ()> {
+    append_normalized_escapes(from, "", URL_RESERVED)
+}
 fn append_normalized_escapes(from: &str, esc_extra: &str, esc_ok: &str) -> Result<String, ()> {
     let bytes = from.as_bytes();
     let mut i = 0usize;
@@ -389,15 +391,13 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
             path: path.into(),
         })
     }
-    let (user, host_with_brackets) = match host.split_once('@') {
-        Some((user, host)) => (Some(user.to_string()), host),
-        None => (None, host),
-    };
-    let host = if host_with_brackets.starts_with('[') && host_with_brackets.ends_with(']') {
-        &host_with_brackets[1..host_with_brackets.len() - 1]
+    let (user, host_port) = if let Some((user, host_port)) = host.split_once('@') {
+        (Some(user.to_string()), host_port)
     } else {
-        host_with_brackets
+        (None, host)
     };
+    let (host_parsed, _port) = parse_host_port(host_port, false);
+    let host = host_parsed.unwrap_or(host_port);
     Ok(crate::Url {
         serialize_alternative_form: true,
         scheme: Scheme::Ssh,
