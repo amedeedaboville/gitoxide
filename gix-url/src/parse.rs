@@ -181,7 +181,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             (authority, None, None)
         };
 
-        let (raw_host, port) = parse_host_port(raw_host);
+        let (raw_host, port) = parse_host_port(raw_host, scheme == Scheme::Git);
         let raw_path = input[authority_end..].trim_start_matches('/');
         let path = if !raw_path.is_empty() {
             let decoded = append_normalized_escapes(raw_path, "", URL_RESERVED).expect("percent decode error for path");
@@ -218,15 +218,17 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     }
 }
 
-fn parse_host_port(host_port: &str) -> (Option<&str>, Option<u16>) {
+fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Option<u16>) {
     if host_port.is_empty() {
         return (None, None);
     }
     // Bracketed IPv6: [addr]:port?
-    if let Some(rest) = host_port.strip_prefix('[') {
-        if let Some((host, after)) = rest.split_once(']') {
-            let port = after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
-            return (Some(host), port);
+    if !is_protocol_git {
+        if let Some(rest) = host_port.strip_prefix('[') {
+            if let Some((host, after)) = rest.split_once(']') {
+                let port = after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok());
+                return (Some(host), port);
+            }
         }
     }
     // Unbracketed IPv6 (contains multiple colons) - treat entire segment as host, no port.
