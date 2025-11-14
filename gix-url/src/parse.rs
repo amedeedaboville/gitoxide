@@ -190,17 +190,8 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             "/".to_string()
         };
         let (host, user, password) = (
-            parsed_host.map(|h| {
-                // Preserve trailing ':' in host for git URLs without an explicit port (e.g., git://host:/repo).
-                let preserve_trailing_colon =
-                    scheme == Scheme::Git && raw_host_port.ends_with(':') && port.is_none() && !h.ends_with(':');
-                let prepared_host = if preserve_trailing_colon {
-                    format!("{h}:")
-                } else {
-                    h.to_string()
-                };
-                append_normalized_escapes(&prepared_host, "", URL_RESERVED).expect("percent decode error for host")
-            }),
+            parsed_host
+                .map(|h| append_normalized_escapes(&h, "", URL_RESERVED).expect("percent decode error for host")),
             raw_user.map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for user")),
             raw_password
                 .map(|s| append_normalized_escapes(s, "", URL_RESERVED).expect("percent decode error for password")),
@@ -244,8 +235,18 @@ fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Opt
         return (Some(host_port), None);
     }
     // Regular host[:port]
-    if let Some((host, port)) = host_port.split_once(':') {
-        return (Some(host), port.parse::<u16>().ok());
+    if let Some(colon) = host_port.find(':') {
+        let after = &host_port[colon + 1..];
+        if after.is_empty() {
+            return match is_protocol_git {
+                // Git URLs without an explicit port keep their trailing colon
+                true => (Some(&host_port[..=colon]), None),
+                false => (Some(&host_port[..colon]), None),
+            };
+        }
+        if let Ok(port) = after.parse::<u16>() {
+            return (Some(&host_port[..colon]), Some(port));
+        }
     }
     // Has no leading [, no ipv6 ::, and no colon, treat it as regular host
     (Some(host_port), None)
