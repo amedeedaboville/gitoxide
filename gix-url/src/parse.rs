@@ -319,14 +319,18 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
     // Find the delimiter colon for scp-like syntax, but ignore colons inside IPv6 brackets.
-    // Prefer the last colon outside of brackets to support inputs with additional colons.
+    // Split at the FIRST ':' that appears AFTER the first '@' (if any), matching scp semantics.
     let mut bracket_depth = 0usize;
     let mut split_at: Option<usize> = None;
+    let first_at = input.as_bytes().iter().position(|b| *b == b'@');
     for (idx, byte) in input.as_bytes().iter().enumerate() {
         match *byte {
             b'[' => bracket_depth = bracket_depth.saturating_add(1),
             b']' => bracket_depth = bracket_depth.saturating_sub(1),
-            b':' if bracket_depth == 0 => split_at = Some(idx),
+            b':' if bracket_depth == 0 && first_at.map(|a| idx > a).unwrap_or(true) => {
+                split_at = Some(idx);
+                break;
+            }
             _ => {}
         }
     }
