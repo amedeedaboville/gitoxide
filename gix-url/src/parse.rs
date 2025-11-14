@@ -361,6 +361,9 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
         });
     }
 
+    // Match git's behavior: paths starting with /~ become ~ (tilde-expansion on remote)
+    let path = if path.starts_with("/~") { &path[1..] } else { path };
+
     #[cfg(feature = "idn")]
     {
         // The path returned by the parsed url often has the wrong number of leading `/` characters but
