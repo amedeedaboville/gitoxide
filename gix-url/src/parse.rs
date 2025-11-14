@@ -391,7 +391,7 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
             path: path.into(),
         })
     }
-    let (user, host_port) = if let Some((user, host_port)) = host.split_once('@') {
+    let (user, host_port) = if let Some((user, host_port)) = host.rsplit_once('@') {
         (Some(user.to_string()), host_port)
     } else {
         (None, host)
