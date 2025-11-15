@@ -118,6 +118,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     check_length(input, protocol_end)?;
     let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
     let scheme = url.scheme().into();
+
     if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path().is_empty() {
         return Err(Error::MissingRepositoryPath {
             url: input.into(),
@@ -137,11 +138,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             .password()
             .map(|s| percent_decoded_utf8(s, UrlKind::Url))
             .transpose()?,
-        // Hosts are case-insensitive only for HTTP(S); preserve case for others.
-        host: url.host_str().map(|h| match scheme {
-            Scheme::Http | Scheme::Https => h.to_ascii_lowercase().into(),
-            _ => h.to_string().into(),
-        }),
+        host: url.host_str().map(Into::into),
         port: url.port(),
         path: url.path().into(),
     })
