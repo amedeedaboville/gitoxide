@@ -6,9 +6,9 @@ use percent_encoding::percent_decode_str;
 use crate::Scheme;
 
 // Characters considered unsafe per RFC 3986 and Git's implementation.
-const URL_UNSAFE_CHARS: &str = " <>\"#%{}|\\^`";
+const URL_UNSAFE_CHARS: &[u8] = b" <>\"#%{}|\\^`";
 // RFC 3986 reserved characters (gen-delims + sub-delims).
-const URL_RESERVED: &str = ":/?#[]@!$&'()*+,;=";
+const URL_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
 
 /// The error returned by [parse()](crate::parse()).
 #[derive(Debug, thiserror::Error)]
@@ -97,7 +97,7 @@ fn is_allowed_scheme_char(chr: char) -> bool {
     matches!(chr, 'a'..='z' | 'A'..='Z' | '0'..='9' | '+' | '-' | '.')
 }
 
-pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
+fn check_length(input: &BStr, protocol_end: usize) -> Result<(), Error> {
     const MAX_LEN: usize = 1024;
     let bytes_to_path = input[protocol_end + "://".len()..]
         .iter()
@@ -111,134 +111,129 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             len: input.len(),
         });
     }
-    #[cfg(feature = "idn")]
-    {
-        let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
-        let scheme = url.scheme().into();
-
-        if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path().is_empty() {
-            return Err(Error::MissingRepositoryPath {
-                url: input.into(),
-                kind: UrlKind::Url,
-            });
-        }
-
-        // For HTTP(S), a host is required.
-        if matches!(scheme, Scheme::Http | Scheme::Https) && url.host_str().is_none() {
-            return Err(Error::MissingRepositoryPath {
-                url: input.into(),
-                kind: UrlKind::Url,
-            });
-        }
-
-        if url.cannot_be_a_base() {
-            return Err(Error::RelativeUrl { url: input.to_owned() });
-        }
-
-        Ok(crate::Url {
-            serialize_alternative_form: false,
-            scheme,
-            user: url_user(&url, UrlKind::Url)?,
-            password: url
-                .password()
-                .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-                .transpose()?,
-            // Hosts are case-insensitive only for HTTP(S); preserve case for others.
-            host: url.host_str().map(|h| match scheme {
-                Scheme::Http | Scheme::Https => h.to_ascii_lowercase().into(),
-                _ => h.to_string().into(),
-            }),
-            port: url.port(),
-            path: url.path().into(),
-        })
+    Ok(())
+}
+#[cfg(feature = "idn")]
+pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
+    check_length(input, protocol_end)?;
+    let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
+    let scheme = url.scheme().into();
+    if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path().is_empty() {
+        return Err(Error::MissingRepositoryPath {
+            url: input.into(),
+            kind: UrlKind::Url,
+        });
     }
-    #[cfg(not(feature = "idn"))]
-    {
-        let input = input_to_utf8(input, UrlKind::Url)?;
-        let scheme_str = &input[..protocol_end];
-        if !scheme_str.chars().all(is_allowed_scheme_char) {
-            return Err(Error::RelativeUrl { url: input.to_owned() });
-        }
-        let scheme = Scheme::from(scheme_str);
 
-        // Parse `userinfo` (username[:password]) if present and before the path/query/fragment.
-        let authority_start = protocol_end + "://".len();
-        let authority_end = input[authority_start..]
-            .find(|c: char| matches!(c, '/' | '?' | '#'))
-            .map(|offset| authority_start + offset)
-            .unwrap_or(input.len());
-        let authority = &input[authority_start..authority_end];
-        /*
-         * Match one of:
-         *   (1) proto://<host>/...
-         *   (2) proto://<user>@<host>/...
-         *   (3) proto://<user>:<pass>@<host>/...
-         */
-        let (raw_host_port, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
-            if let Some((user, pass)) = userinfo.split_once(':') {
-                let user = Some(user); // keep empty user if password is present
-                let pass = (!pass.is_empty()).then_some(pass);
-                (host, user, pass)
-            } else {
-                let user = (!userinfo.is_empty()).then_some(userinfo);
-                (host, user, None)
-            }
+    if url.cannot_be_a_base() {
+        return Err(Error::RelativeUrl { url: input.to_owned() });
+    }
+
+    Ok(crate::Url {
+        serialize_alternative_form: false,
+        scheme,
+        user: url_user(&url, UrlKind::Url)?,
+        password: url
+            .password()
+            .map(|s| percent_decoded_utf8(s, UrlKind::Url))
+            .transpose()?,
+        // Hosts are case-insensitive only for HTTP(S); preserve case for others.
+        host: url.host_str().map(|h| match scheme {
+            Scheme::Http | Scheme::Https => h.to_ascii_lowercase().into(),
+            _ => h.to_string().into(),
+        }),
+        port: url.port(),
+        path: url.path().into(),
+    })
+}
+
+#[cfg(not(feature = "idn"))]
+pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
+    check_length(input, protocol_end)?;
+    let input = input_to_utf8(input, UrlKind::Url)?;
+
+    let scheme_str = &input[..protocol_end];
+    if !scheme_str.chars().all(is_allowed_scheme_char) {
+        return Err(Error::RelativeUrl { url: input.to_owned() });
+    }
+    let scheme: Scheme = Scheme::from(scheme_str);
+
+    // The "authority" is the part of the URL between the scheme and the path.
+    let authority_start = protocol_end + "://".len();
+    let authority_end = input[authority_start..]
+        .find(|c: char| matches!(c, '/' | '?' | '#'))
+        .map(|offset| authority_start + offset)
+        .unwrap_or(input.len());
+    let authority = &input[authority_start..authority_end];
+
+    // Match one of:
+    //   (1) scheme://<host>/...
+    //   (2) scheme://<user>@<host>/...
+    //   (3) scheme://<user>:<pass>@<host>/...
+    let (raw_host_port, raw_user, raw_password) = if let Some((userinfo, host)) = authority.split_once('@') {
+        if let Some((user, pass)) = userinfo.split_once(':') {
+            let user = Some(user);
+            let pass = (!pass.is_empty()).then_some(pass);
+            (host, user, pass)
         } else {
-            (authority, None, None)
-        };
+            let user = (!userinfo.is_empty()).then_some(userinfo);
+            (host, user, None)
+        }
+    } else {
+        (authority, None, None)
+    };
 
-        // Parse host[:port] portion
-        let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
-        let (host, user, password) = (
-            // Hosts are case-insensitive only for HTTP(S); preserve case for others.
-            parsed_host
-                .map(|h| {
-                    if matches!(scheme, Scheme::Http | Scheme::Https) {
-                        h.to_ascii_lowercase()
-                    } else {
-                        h.to_string()
-                    }
-                })
-                .and_then(|h| escape_url_chars(&h).ok()),
-            raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?,
-            raw_password
-                .filter(|s| !s.is_empty())
-                .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-                .transpose()?,
-        );
+    // Parse host[:port] portion
+    let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
+    let (host, user, password) = (
+        // Hosts are case-insensitive only for HTTP(S).
+        parsed_host
+            .map(|h| {
+                if matches!(scheme, Scheme::Http | Scheme::Https) {
+                    h.to_ascii_lowercase()
+                } else {
+                    h.to_string()
+                }
+            })
+            .and_then(|h| escape_url_chars(&h).ok()),
+        raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?,
+        raw_password
+            .filter(|s| !s.is_empty())
+            .map(|s| percent_decoded_utf8(s, UrlKind::Url))
+            .transpose()?,
+    );
 
-        let raw_path = &input[authority_end..];
-        let path = match (raw_path.is_empty(), &scheme) {
-            (false, _) => escape_url_chars(raw_path).expect("percent decode error for path"),
-            (true, Scheme::Http | Scheme::Https) => "/".to_string(),
-            // Path is required for ssh and git URLs
-            (true, Scheme::Ssh | Scheme::Git) => {
-                return Err(Error::MissingRepositoryPath {
-                    url: input.into(),
-                    kind: UrlKind::Url,
-                });
-            }
-            (true, _) => "".to_string(),
-        };
+    // A host is required for HTTP(S)
+    if host.is_none() && matches!(scheme, Scheme::Http | Scheme::Https) {
+        return Err(Error::MissingRepositoryPath {
+            url: input.into(),
+            kind: UrlKind::Url,
+        });
+    }
 
-        // For HTTP(S), a host is required.
-        if matches!(scheme, Scheme::Http | Scheme::Https) && host.is_none() {
+    let raw_path = &input[authority_end..];
+    let path = match (raw_path.is_empty(), &scheme) {
+        (false, _) => escape_url_chars(raw_path).expect("percent decode error for path"),
+        (true, Scheme::Http | Scheme::Https) => "/".to_string(),
+        // Path is required for SSH and git URLs
+        (true, Scheme::Ssh | Scheme::Git) => {
             return Err(Error::MissingRepositoryPath {
                 url: input.into(),
                 kind: UrlKind::Url,
             });
         }
+        (true, _) => "".to_string(),
+    };
 
-        Ok(crate::Url {
-            serialize_alternative_form: false,
-            scheme,
-            user,
-            password,
-            host,
-            port,
-            path: path.into(),
-        })
-    }
+    Ok(crate::Url {
+        serialize_alternative_form: false,
+        scheme,
+        user,
+        password,
+        host,
+        port,
+        path: path.into(),
+    })
 }
 
 fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Option<u16>) {
@@ -288,62 +283,44 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
 }
 
 /*
- * Convert two consecutive hexadecimal digits into a char.  Return a
- * negative value on error.  Don't run over the end of short strings.
- */
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(10 + (b - b'a')),
-        b'A'..=b'F' => Some(10 + (b - b'A')),
-        _ => None,
-    }
-}
-
-fn hex_to_char(hi: u8, lo: u8) -> Option<u8> {
-    let Some(hi_v) = hex_val(hi) else { return None };
-    let Some(lo_v) = hex_val(lo) else {
-        return None;
-    };
-    Some((hi_v << 4) | lo_v)
-}
-
+* A port of git's append_normalized_escapes function from urlmatch.c.
+* Escapes the set of characters from the RFC 3986 unsafe characters
+* (0x00-0x1F,0x7F-0xFF," <>\"#%{}|\\^`") and unescapes everything else.
+* The characters in URL_RESERVED will be left escaped if found that way,
+* but will not be unescaped otherwise (used for delimiters).  If
+* a %-escape sequence is encountered that is not
+* followed by 2 hexadecimal digits, the sequence is invalid and  Err will be returned.
+*
+* All %-escape sequences will be normalized to UPPERCASE as indicated in RFC 3986.
+* Alphanumerics and "-._~" will always be unescaped as per RFC 3986.
+*/
 fn escape_url_chars(from: &str) -> Result<String, ()> {
-    append_normalized_escapes(from, "", URL_RESERVED)
-}
-fn append_normalized_escapes(from: &str, esc_extra: &str, esc_ok: &str) -> Result<String, ()> {
-    let bytes = from.as_bytes();
-    let mut i = 0usize;
     let mut out = String::with_capacity(from.len());
+    let mut it = from.as_bytes().iter();
 
-    while i < bytes.len() {
-        let mut ch = bytes[i];
+    while let Some(&b) = it.next() {
+        let mut ch = b;
         let mut was_esc = false;
-        i += 1;
 
         if ch == b'%' {
-            if i + 1 >= bytes.len() {
+            let hi = it.next().copied().ok_or(())?;
+            let lo = it.next().copied().ok_or(())?;
+            if !(hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit()) {
                 return Err(());
             }
+            let hi = char::from(hi).to_digit(16).ok_or(())? as u8;
+            let lo = char::from(lo).to_digit(16).ok_or(())? as u8;
+            ch = (hi << 4) | lo;
             was_esc = true;
-            let Some(converted_ch) = hex_to_char(bytes[i], bytes[i + 1]) else {
-                return Err(());
-            };
-            ch = converted_ch;
-            i += 2;
         }
 
-        let should_escape = ch <= 0x1F
-            || ch >= 0x7F
-            || URL_UNSAFE_CHARS.as_bytes().contains(&ch)
-            || (!esc_extra.is_empty() && esc_extra.as_bytes().contains(&ch))
-            || (was_esc && !esc_ok.is_empty() && esc_ok.as_bytes().contains(&ch));
+        let should_escape = !ch.is_ascii()
+            || ch.is_ascii_control()
+            || URL_UNSAFE_CHARS.contains(&ch)
+            || (was_esc && URL_RESERVED.contains(&ch));
 
         if should_escape {
-            out.push('%');
-            const HEX: &[u8; 16] = b"0123456789ABCDEF";
-            out.push(HEX[(ch >> 4) as usize] as char);
-            out.push(HEX[(ch & 0x0F) as usize] as char);
+            out.push_str(percent_encoding::percent_encode_byte(ch));
         } else {
             out.push(ch as char);
         }
