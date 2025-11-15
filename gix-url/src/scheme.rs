@@ -48,6 +48,19 @@ impl Scheme {
             Ext(name) => name.as_str(),
         }
     }
+
+    /// Return the default port for use according to the URL scheme.
+    /// Note that there may be no default port either.
+    pub fn default_port(&self) -> Option<u16> {
+        use Scheme::*;
+        match self {
+            Git => Some(9418),
+            Ssh => Some(22),
+            Http => Some(80),
+            Https => Some(443),
+            File | Ext(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Scheme {

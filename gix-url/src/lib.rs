@@ -38,6 +38,10 @@ pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
         InputScheme::Url { protocol_end } => parse::url(input, protocol_end),
         InputScheme::Scp { colon } => parse::scp(input, colon),
     }
+    .map(|mut url| {
+        url.normalize();
+        url
+    })
 }
 
 /// Expand `path` for the given `user`, which can be obtained by [`parse()`], resolving the home directories
@@ -196,6 +200,13 @@ impl Url {
         }
         Ok(())
     }
+
+    /// Normalize the URL in the same way as git's url_normalize() function.
+    pub fn normalize(&mut self) {
+        if self.port == self.scheme.default_port() {
+            self.port = None;
+        }
+    }
 }
 
 /// Access
@@ -297,16 +308,7 @@ impl Url {
     /// Return the actual or default port for use according to the URL scheme.
     /// Note that there may be no default port either.
     pub fn port_or_default(&self) -> Option<u16> {
-        self.port.or_else(|| {
-            use Scheme::*;
-            Some(match self.scheme {
-                Http => 80,
-                Https => 443,
-                Ssh => 22,
-                Git => 9418,
-                File | Ext(_) => return None,
-            })
-        })
+        self.port.or_else(|| self.scheme.default_port())
     }
 }
 

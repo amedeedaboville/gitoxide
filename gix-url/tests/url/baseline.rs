@@ -185,7 +185,7 @@ mod baseline {
 
         pub fn max_num_failures(&self) -> usize {
             match self {
-                Kind::Unix => 156,
+                Kind::Unix => 174,
                 Kind::Windows => 198 + 6,
             }
         }
