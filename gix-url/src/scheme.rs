@@ -23,7 +23,7 @@ pub enum Scheme {
 
 impl<'a> From<&'a str> for Scheme {
     fn from(value: &'a str) -> Self {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             // "ssh+git" and "git+ssh" are legacy, but Git still allows them and so should we
             "ssh" | "ssh+git" | "git+ssh" => Scheme::Ssh,
             "file" => Scheme::File,
