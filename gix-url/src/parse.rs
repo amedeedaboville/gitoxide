@@ -123,6 +123,14 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             });
         }
 
+        // For HTTP(S), a host is required.
+        if matches!(scheme, Scheme::Http | Scheme::Https) && url.host_str().is_none() {
+            return Err(Error::MissingRepositoryPath {
+                url: input.into(),
+                kind: UrlKind::Url,
+            });
+        }
+
         if url.cannot_be_a_base() {
             return Err(Error::RelativeUrl { url: input.to_owned() });
         }
@@ -135,7 +143,11 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
                 .password()
                 .map(|s| percent_decoded_utf8(s, UrlKind::Url))
                 .transpose()?,
-            host: url.host_str().map(Into::into),
+            // Hosts are case-insensitive only for HTTP(S); preserve case for others.
+            host: url.host_str().map(|h| match scheme {
+                Scheme::Http | Scheme::Https => h.to_ascii_lowercase().into(),
+                _ => h.to_string().into(),
+            }),
             port: url.port(),
             path: url.path().into(),
         })
@@ -178,7 +190,16 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         // Parse host[:port] portion
         let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
         let (host, user, password) = (
-            parsed_host.and_then(|h| escape_url_chars(&h).ok()),
+            // Hosts are case-insensitive only for HTTP(S); preserve case for others.
+            parsed_host
+                .map(|h| {
+                    if matches!(scheme, Scheme::Http | Scheme::Https) {
+                        h.to_ascii_lowercase()
+                    } else {
+                        h.to_string()
+                    }
+                })
+                .and_then(|h| escape_url_chars(&h).ok()),
             raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?,
             raw_password
                 .filter(|s| !s.is_empty())
@@ -199,6 +220,14 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             }
             (true, _) => "".to_string(),
         };
+
+        // For HTTP(S), a host is required.
+        if matches!(scheme, Scheme::Http | Scheme::Https) && host.is_none() {
+            return Err(Error::MissingRepositoryPath {
+                url: input.into(),
+                kind: UrlKind::Url,
+            });
+        }
 
         Ok(crate::Url {
             serialize_alternative_form: false,
