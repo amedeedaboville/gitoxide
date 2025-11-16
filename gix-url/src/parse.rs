@@ -177,34 +177,27 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     };
 
     let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
+    let host = if matches!(scheme, Scheme::Http | Scheme::Https) {
+        // For HTTP(S), hosts are case-insensitive and required
+        if let Some(host) = parsed_host {
+            Some(host.to_ascii_lowercase())
+        } else {
+            return Err(Error::MissingRepositoryPath {
+                url: input.into(),
+                kind: UrlKind::Url,
+            });
+        }
+    } else {
+        parsed_host.map(|h| h.to_string())
+    };
     // Remove default ports for the scheme (eg http:80 or https:443). This matches the url
     // crate's behavior but we may want to split this into a separate normalization step.
     let port = if port == scheme.default_port() { None } else { port };
-    let (host, user, password) = (
-        // Hosts are case-insensitive for HTTP(S)
-        parsed_host
-            .map(|h| {
-                if matches!(scheme, Scheme::Http | Scheme::Https) {
-                    h.to_ascii_lowercase()
-                } else {
-                    h.to_string()
-                }
-            })
-            .and_then(|h| escape_url_chars(&h).ok()),
-        raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?,
-        raw_password
-            .filter(|s| !s.is_empty())
-            .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-            .transpose()?,
-    );
-
-    // A host is required for HTTP(S)
-    if host.is_none() && matches!(scheme, Scheme::Http | Scheme::Https) {
-        return Err(Error::MissingRepositoryPath {
-            url: input.into(),
-            kind: UrlKind::Url,
-        });
-    }
+    let user = raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?;
+    let password = raw_password
+        .filter(|s| !s.is_empty())
+        .map(|s| percent_decoded_utf8(s, UrlKind::Url))
+        .transpose()?;
 
     let raw_path = &input[authority_end..];
     let path = match (raw_path.is_empty(), &scheme) {
