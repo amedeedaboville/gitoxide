@@ -17,8 +17,7 @@ doctest = false
 [features]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde"]
-## Enable internationalized domain name (IDN) support using the `url` crate for more comprehensive URL parsing.
-## When disabled (default), uses a lighter-weight Git-compatible parser.
+## Enable internationalized domain name parsing in hostnames using the `url` crate.
 idn = ["dep:url"]
 
 [dependencies]
