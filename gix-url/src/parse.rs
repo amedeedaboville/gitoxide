@@ -6,8 +6,10 @@ use percent_encoding::percent_decode_str;
 use crate::Scheme;
 
 // Characters considered unsafe per RFC 3986 and Git's implementation.
+#[cfg(not(feature = "idn"))]
 const URL_UNSAFE_CHARS: &[u8] = b" <>\"#%{}|\\^`";
 // RFC 3986 reserved characters (gen-delims + sub-delims).
+#[cfg(not(feature = "idn"))]
 const URL_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
 
 /// The error returned by [parse()](crate::parse()).
@@ -92,6 +94,7 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
     InputScheme::Local
 }
 
+#[cfg(not(feature = "idn"))]
 fn is_allowed_scheme_char(chr: char) -> bool {
     matches!(chr, 'a'..='z' | 'A'..='Z' | '0'..='9' | '+' | '-' | '.')
 }
@@ -235,6 +238,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     })
 }
 
+#[cfg(not(feature = "idn"))]
 fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Option<u16>) {
     if host_port.is_empty() {
         return (None, None);
@@ -249,7 +253,7 @@ fn parse_host_port(host_port: &str, is_protocol_git: bool) -> (Option<&str>, Opt
             return (Some(host), port);
         }
     }
-    // Unbracketed IPv6 (contains multiple colons) - treat entire segment as host, no port.
+    // Unbracketed IPv6 like ::1, treat entire segment as host without port
     if host_port.bytes().filter(|b| *b == b':').count() > 1 {
         return (Some(host_port), None);
     }
@@ -289,6 +293,7 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
 //
 // All %-escape sequences are normalized to UPPERCASE as indicated in RFC 3986.
 // Alphanumerics and "-._~" are always unescaped as per RFC 3986.
+#[cfg(not(feature = "idn"))]
 fn escape_url_chars(from: &str) -> Result<String, ()> {
     let mut out = String::with_capacity(from.len());
     let mut it = from.as_bytes().iter();
@@ -353,7 +358,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
             kind: UrlKind::Scp,
             source,
         })?;
-        (url_user(&url, UrlKind::Scp)?, url.host_str())
+        (url_user(&url, UrlKind::Scp)?, url.host_str().map(Into::into))
     };
     #[cfg(not(feature = "idn"))]
     let (user, host) = {
@@ -363,7 +368,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
             (None, host)
         };
         let host = parse_host_port(host_port, false).0.or(Some(host_port));
-        (user, host)
+        (user, host.map(Into::into))
     };
 
     Ok(crate::Url {
@@ -371,7 +376,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
         scheme: Scheme::Ssh,
         user,
         password: None,
-        host: host.map(Into::into),
+        host: host,
         port: None,
         path: path.into(),
     })
