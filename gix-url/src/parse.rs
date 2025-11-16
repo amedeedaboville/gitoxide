@@ -196,13 +196,13 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     let user = raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?;
     let password = raw_password
         .filter(|s| !s.is_empty())
-        .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-        .transpose()?;
-
+        .map(|s| percent_decoded_utf8(s, UrlKind::Url).expect("percent decode error for password"));
     let raw_path = &input[authority_end..];
     let path = match (raw_path.is_empty(), &scheme) {
-        (false, _) => escape_url_chars(raw_path).expect("percent decode error for path"),
-        (true, Scheme::Http | Scheme::Https) => "/".to_string(),
+        (false, _) => percent_decoded_utf8(raw_path, UrlKind::Url)
+            .expect("percent decode error for path")
+            .into(),
+        (true, Scheme::Http | Scheme::Https) => BString::from("/"),
         // Path is required for SSH and git URLs
         (true, Scheme::Ssh | Scheme::Git) => {
             return Err(Error::MissingRepositoryPath {
@@ -210,7 +210,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
                 kind: UrlKind::Url,
             });
         }
-        (true, _) => "".to_string(),
+        (true, _) => BString::from(""),
     };
 
     Ok(crate::Url {
@@ -220,7 +220,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         password,
         host,
         port,
-        path: path.into(),
+        path,
     })
 }
 
@@ -269,55 +269,6 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
             source: err,
         })?
         .into_owned())
-}
-
-// A port of git's append_normalized_escapes() from urlmatch.c.
-// Escapes the set of characters from the RFC 3986 unsafe characters
-// and unescapes everything but the characters in URL_RESERVED.
-// If a %-escape sequence is encountered that is not followed by 2
-// hexadecimal digits, the sequence is invalid and an Err is returned.
-//
-// All %-escape sequences are normalized to UPPERCASE as indicated in RFC 3986.
-// Alphanumerics and "-._~" are always unescaped as per RFC 3986.
-#[cfg(not(feature = "idn"))]
-fn escape_url_chars(from: &str) -> Result<String, ()> {
-    // Unsafe characters in URLs according to RFC 3986 and Git.
-    const URL_UNSAFE_CHARS: &[u8] = b" <>\"#%{}|\\^`";
-    // RFC 3986 reserved characters (gen-delims + sub-delims).
-    const URL_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
-
-    let mut out = String::with_capacity(from.len());
-    let mut it = from.as_bytes().iter();
-
-    while let Some(&b) = it.next() {
-        let mut ch = b;
-        let mut was_esc = false;
-
-        if ch == b'%' {
-            let hi = it.next().copied().ok_or(())?;
-            let lo = it.next().copied().ok_or(())?;
-            if !(hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit()) {
-                return Err(());
-            }
-            let hi = char::from(hi).to_digit(16).ok_or(())? as u8;
-            let lo = char::from(lo).to_digit(16).ok_or(())? as u8;
-            ch = (hi << 4) | lo;
-            was_esc = true;
-        }
-
-        let should_escape = !ch.is_ascii()
-            || ch.is_ascii_control()
-            || URL_UNSAFE_CHARS.contains(&ch)
-            || (was_esc && URL_RESERVED.contains(&ch));
-
-        if should_escape {
-            out.push_str(percent_encoding::percent_encode_byte(ch));
-        } else {
-            out.push(ch as char);
-        }
-    }
-
-    Ok(out)
 }
 
 pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
