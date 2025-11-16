@@ -152,7 +152,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     if !scheme_str.chars().all(is_allowed_scheme_char) {
         return Err(Error::RelativeUrl { url: input.to_owned() });
     }
-    let scheme: Scheme = Scheme::from(scheme_str);
+    let scheme: Scheme = Scheme::from(scheme_str.to_ascii_lowercase().as_str());
 
     // The "authority" is the part of the URL between the scheme and the path.
     let authority_start = protocol_end + "://".len();
