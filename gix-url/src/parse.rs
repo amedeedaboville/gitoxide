@@ -176,6 +176,8 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         (authority, None, None)
     };
 
+    let user = raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url).expect("percent decode error for user"));
+
     let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
     let host = if matches!(scheme, Scheme::Http | Scheme::Https) {
         // For HTTP(S), hosts are case-insensitive and required
@@ -190,13 +192,15 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     } else {
         parsed_host.map(|h| h.to_string())
     };
-    // Remove default ports for the scheme (eg http:80 or https:443). This matches the url
-    // crate's behavior but we may want to split this into a separate normalization step.
-    let port = if port == scheme.default_port() { None } else { port };
-    let user = raw_user.map(|s| percent_decoded_utf8(s, UrlKind::Url)).transpose()?;
+
     let password = raw_password
         .filter(|s| !s.is_empty())
         .map(|s| percent_decoded_utf8(s, UrlKind::Url).expect("percent decode error for password"));
+
+    // Remove default ports for the scheme (eg http:80 or https:443). This matches
+    // existing behavior but we may want to split this into a separate normalization step.
+    let port = if port == scheme.default_port() { None } else { port };
+
     let raw_path = &input[authority_end..];
     let path = match (raw_path.is_empty(), &scheme) {
         (false, _) => percent_decoded_utf8(raw_path, UrlKind::Url)
