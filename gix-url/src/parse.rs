@@ -5,13 +5,6 @@ use percent_encoding::percent_decode_str;
 
 use crate::Scheme;
 
-// Characters considered unsafe per RFC 3986 and Git's implementation.
-#[cfg(not(feature = "idn"))]
-const URL_UNSAFE_CHARS: &[u8] = b" <>\"#%{}|\\^`";
-// RFC 3986 reserved characters (gen-delims + sub-delims).
-#[cfg(not(feature = "idn"))]
-const URL_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
-
 /// The error returned by [parse()](crate::parse()).
 #[derive(Debug, thiserror::Error)]
 #[allow(missing_docs)]
@@ -153,11 +146,12 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
 
     let scheme_str = &input[..protocol_end];
     if !scheme_str.chars().all(is_allowed_scheme_char) {
+        // This is a RelativeURL error bc one of the tests expects that for "invalid:://"
         return Err(Error::RelativeUrl { url: input.to_owned() });
     }
     let scheme: Scheme = Scheme::from(scheme_str.to_ascii_lowercase().as_str());
 
-    // The "authority" is the part of the URL between the scheme and the path.
+    // The "authority" is the part of the URL between the scheme and the path
     let authority_start = protocol_end + "://".len();
     let authority_end = input[authority_start..]
         .find(|c: char| matches!(c, '/' | '?' | '#'))
@@ -182,13 +176,12 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         (authority, None, None)
     };
 
-    // Parse host[:port] portion
     let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
     // Remove default ports for the scheme (eg http:80 or https:443). This matches the url
     // crate's behavior but we may want to split this into a separate normalization step.
     let port = if port == scheme.default_port() { None } else { port };
     let (host, user, password) = (
-        // Hosts are case-insensitive only for HTTP(S).
+        // Hosts are case-insensitive for HTTP(S)
         parsed_host
             .map(|h| {
                 if matches!(scheme, Scheme::Http | Scheme::Https) {
@@ -295,6 +288,11 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
 // Alphanumerics and "-._~" are always unescaped as per RFC 3986.
 #[cfg(not(feature = "idn"))]
 fn escape_url_chars(from: &str) -> Result<String, ()> {
+    // Unsafe characters in URLs according to RFC 3986 and Git.
+    const URL_UNSAFE_CHARS: &[u8] = b" <>\"#%{}|\\^`";
+    // RFC 3986 reserved characters (gen-delims + sub-delims).
+    const URL_RESERVED: &[u8] = b":/?#[]@!$&'()*+,;=";
+
     let mut out = String::with_capacity(from.len());
     let mut it = from.as_bytes().iter();
 
