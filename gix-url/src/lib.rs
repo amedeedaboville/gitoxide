@@ -38,10 +38,6 @@ pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
         InputScheme::Url { protocol_end } => parse::url(input, protocol_end),
         InputScheme::Scp { colon } => parse::scp(input, colon),
     }
-    .map(|mut url| {
-        url.normalize();
-        url
-    })
 }
 
 /// Expand `path` for the given `user`, which can be obtained by [`parse()`], resolving the home directories
@@ -199,13 +195,6 @@ impl Url {
             self.path = gix_path::into_bstr(abs_path).into_owned();
         }
         Ok(())
-    }
-
-    /// Normalize the URL in the same way as git's url_normalize() function.
-    pub fn normalize(&mut self) {
-        if self.port == self.scheme.default_port() {
-            self.port = None;
-        }
     }
 }
 
