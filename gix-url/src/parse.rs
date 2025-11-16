@@ -20,7 +20,6 @@ pub enum Error {
         kind: UrlKind,
         source: std::str::Utf8Error,
     },
-
     #[error("{} {url:?} can not be parsed as valid URL", kind.as_str())]
     Url {
         url: String,
@@ -182,6 +181,9 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
 
     // Parse host[:port] portion
     let (parsed_host, port) = parse_host_port(raw_host_port, scheme == Scheme::Git);
+    // Remove default ports for the scheme (eg http:80 or https:443). This matches the url
+    // crate's behavior but we may want to split this into a separate normalization step.
+    let port = if port == scheme.default_port() { None } else { port };
     let (host, user, password) = (
         // Hosts are case-insensitive only for HTTP(S).
         parsed_host
@@ -279,18 +281,14 @@ fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
         .into_owned())
 }
 
-/*
-* A port of git's append_normalized_escapes function from urlmatch.c.
-* Escapes the set of characters from the RFC 3986 unsafe characters
-* (0x00-0x1F,0x7F-0xFF," <>\"#%{}|\\^`") and unescapes everything else.
-* The characters in URL_RESERVED will be left escaped if found that way,
-* but will not be unescaped otherwise (used for delimiters).  If
-* a %-escape sequence is encountered that is not
-* followed by 2 hexadecimal digits, the sequence is invalid and  Err will be returned.
-*
-* All %-escape sequences will be normalized to UPPERCASE as indicated in RFC 3986.
-* Alphanumerics and "-._~" will always be unescaped as per RFC 3986.
-*/
+// A port of git's append_normalized_escapes() from urlmatch.c.
+// Escapes the set of characters from the RFC 3986 unsafe characters
+// and unescapes everything but the characters in URL_RESERVED.
+// If a %-escape sequence is encountered that is not followed by 2
+// hexadecimal digits, the sequence is invalid and an Err is returned.
+//
+// All %-escape sequences are normalized to UPPERCASE as indicated in RFC 3986.
+// Alphanumerics and "-._~" are always unescaped as per RFC 3986.
 fn escape_url_chars(from: &str) -> Result<String, ()> {
     let mut out = String::with_capacity(from.len());
     let mut it = from.as_bytes().iter();
@@ -326,33 +324,11 @@ fn escape_url_chars(from: &str) -> Result<String, ()> {
     Ok(out)
 }
 
-pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
+pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
-    // Find the delimiter colon for scp-like syntax, but ignore colons inside IPv6 brackets.
-    // Split at the FIRST ':' that appears AFTER the first '@' (if any), matching scp semantics.
-    let mut bracket_depth = 0usize;
-    let mut split_at: Option<usize> = None;
-    let first_at = input.as_bytes().iter().position(|b| *b == b'@');
-    for (idx, byte) in input.as_bytes().iter().enumerate() {
-        match *byte {
-            b'[' => bracket_depth = bracket_depth.saturating_add(1),
-            b']' => bracket_depth = bracket_depth.saturating_sub(1),
-            b':' if bracket_depth == 0 && first_at.map(|a| idx > a).unwrap_or(true) => {
-                split_at = Some(idx);
-                break;
-            }
-            _ => {}
-        }
-    }
-    let Some(split_at) = split_at else {
-        return Err(Error::MissingRepositoryPath {
-            url: input.to_owned().into(),
-            kind: UrlKind::Scp,
-        });
-    };
-
-    let (host, path) = input.split_at(split_at);
+    // TODO: this incorrectly splits at IPv6 addresses, check for `[]` before splitting
+    let (host, path) = input.split_at(colon);
     debug_assert_eq!(path.get(..1), Some(":"), "{path} should start with :");
     let path = &path[1..];
 
@@ -367,7 +343,7 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
     let path = if path.starts_with("/~") { &path[1..] } else { path };
 
     #[cfg(feature = "idn")]
-    {
+    let (user, host) = {
         // The path returned by the parsed url often has the wrong number of leading `/` characters but
         // should never differ in any other way (ssh URLs should not contain a query or fragment part).
         // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
@@ -377,33 +353,25 @@ pub(crate) fn scp(input: &BStr, _colon: usize) -> Result<crate::Url, Error> {
             kind: UrlKind::Scp,
             source,
         })?;
-
-        Ok(crate::Url {
-            serialize_alternative_form: true,
-            scheme: url.scheme().into(),
-            user: url_user(&url, UrlKind::Scp)?,
-            password: url
-                .password()
-                .map(|s| percent_decoded_utf8(s, UrlKind::Scp))
-                .transpose()?,
-            host: url.host_str().map(Into::into),
-            port: url.port(),
-            path: path.into(),
-        })
-    }
-    let (user, host_port) = if let Some((user, host_port)) = host.rsplit_once('@') {
-        (Some(user.to_string()), host_port)
-    } else {
-        (None, host)
+        (url_user(&url, UrlKind::Scp)?, url.host_str())
     };
-    let (host_parsed, _port) = parse_host_port(host_port, false);
-    let host = host_parsed.unwrap_or(host_port);
+    #[cfg(not(feature = "idn"))]
+    let (user, host) = {
+        let (user, host_port) = if let Some((user, host_port)) = host.rsplit_once('@') {
+            (Some(user.to_string()), host_port)
+        } else {
+            (None, host)
+        };
+        let host = parse_host_port(host_port, false).0.or(Some(host_port));
+        (user, host)
+    };
+
     Ok(crate::Url {
         serialize_alternative_form: true,
         scheme: Scheme::Ssh,
         user,
         password: None,
-        host: Some(host.into()),
+        host: host.map(Into::into),
         port: None,
         path: path.into(),
     })
