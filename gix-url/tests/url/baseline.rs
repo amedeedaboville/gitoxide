@@ -184,9 +184,14 @@ mod baseline {
         }
 
         pub fn max_num_failures(&self) -> usize {
+            #[cfg(feature = "idn")]
+            let num_failures = 189;
+            #[cfg(not(feature = "idn"))]
+            let num_failures = 174;
+
             match self {
-                Kind::Unix => 174,
-                Kind::Windows => 174 + 6,
+                Kind::Unix => num_failures,
+                Kind::Windows => num_failures + 6,
             }
         }
 
